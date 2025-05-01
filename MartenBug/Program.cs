@@ -40,6 +40,7 @@ namespace MartenBug
 
             int testEvents = 10;
             var userId = Guid.CreateVersion7();
+            List<IDatabaseEvent> userEvents = new List<IDatabaseEvent>();
 
             await using (var session = documentStore.LightweightSession())
             {
@@ -47,6 +48,7 @@ namespace MartenBug
                 var password = "super secret";
 
                 var userCreatedEvent = new UserCreated(userId, username, password);
+                userEvents.Add(userCreatedEvent);
 
                 var stream = session.Events.StartStream(userCreatedEvent);
 
@@ -56,10 +58,18 @@ namespace MartenBug
 
                 for (int i = 1; i < testEvents; i++)
                 {
-                    session.Events.Append(userId, new UserUpdated(userId, $"User {i}"));
+                    var userUpdateEvent = new UserUpdated(userId, $"User {i}");
+                    userEvents.Add(userUpdateEvent);
+
+                    session.Events.Append(userId, userUpdateEvent);
                     await session.SaveChangesAsync();
                 }
             }
+
+            // Works fine
+            var userEventsFromListBackedIQueryable = userEvents
+                .Select(x => new ClassWithPrimaryConstructor(x))
+                .ToList();
 
             // Works fine
             var userEventsByRequiredProps = await querySession.Events.QueryAllRawEvents()
@@ -82,13 +92,18 @@ namespace MartenBug
                 .Select(x => new AuditEventWithPrimaryConstructor(x))
                 .ToListAsync();
 
+            Assert.Equals(testEvents, userEventsFromListBackedIQueryable.Count);
             Assert.Equals(testEvents, userEventsByPrimaryConstructor.Count);
             Assert.Equals(testEvents, userEventsByRequiredProps.Count);
         }
     }
 
-    public record UserCreated(Guid Id, string Username, string Password);
-    public record UserUpdated(Guid Id, string Username);
+    public record UserCreated(Guid Id, string Username, string Password) : IDatabaseEvent;
+    public record UserUpdated(Guid Id, string Username) : IDatabaseEvent;
+    public interface IDatabaseEvent
+    {
+        Guid Id { get; }
+    }
 
     public class AuditEventWithPrimaryConstructor(IEvent @event)
     {
@@ -106,5 +121,10 @@ namespace MartenBug
         public required DateTimeOffset TimestampUtc { get; set; }
         public required string Name { get; set; } = "TODO";
         public required string Description { get; set; } = "TODO";
+    }
+
+    public class ClassWithPrimaryConstructor(IDatabaseEvent @event)
+    {
+
     }
 }
